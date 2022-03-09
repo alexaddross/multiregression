@@ -9,6 +9,12 @@ import re
 import numpy as np
 
 
+# TODO: Оформить функцию для постоянного переобучениия
+# TODO: Переписать весь код из функций в класс
+# TODO: Интегрировать сохранение модели в файл
+# TODO: Связать файл модели и ядро
+
+
 def RaitAdap(rait):
     if type(rait)==str:
         if rait[0].isdigit():
@@ -71,7 +77,7 @@ def Predictor(model, filter):
     
 
 def StartUP():
-    conn = sqlite3.connect("Main_base.db", detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES)
+    conn = sqlite3.connect("C:\paining_redefined\initital_code\Main_base.db", detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES)
     df = pd.read_sql_query("SELECT * FROM Offer", conn)
     word1 = "Цена_продажи"
     word2 = "Дата_продажи"
@@ -142,3 +148,7 @@ def StartUP():
     result = [filter, real, predicted, model, df]
 
     return result
+
+data = StartUP()
+for line in data:
+    print(line)

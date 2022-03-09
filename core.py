@@ -1,14 +1,21 @@
 from fastapi import FastAPI
-from fastapi import Form
 from data_models.models import BasePainting
+from db_access.manipulator import Manipulator
+
+
+# TODO: Связать подгрузку файла модели и ядро
+# TODO: Создать форму для ввода тестовых данных
+# TODO: Создать Flask-приложения поверх API
 
 
 api = FastAPI()
+db = Manipulator()
 
 
 @api.get('/')
 async def get_root():
     return {'ok': 200}
+
 
 @api.post('/analyse')
 async def analyse(painting: BasePainting):
