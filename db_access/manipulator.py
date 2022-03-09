@@ -1,10 +1,12 @@
 from typing import List
 import sqlalchemy as sql
+from utils.helpers import load_settings
 
 
 class Manipulator:
     def __init__(self) -> None:
-        self.engine = sql.create_engine('DB PATH')
+        self.settings = load_settings('db_access')
+        self.engine = sql.create_engine(self.settings['DB_ADDRESS'])
     
     def get(self, **kwargs) -> List:
         if kwargs['all'] == 'all':
