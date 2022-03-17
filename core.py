@@ -10,7 +10,7 @@ from db_access.manipulator import Manipulator
 # TODO: Вопрос с отрицательными значениями модели
 # TODO: Тест на реальных данных модели
 # TODO: Объединение мультирегрессий в единое значения со временем (временные ряды)
-
+# TODO: Линейная регрессия
 
 api = FastAPI()
 db = Manipulator()
