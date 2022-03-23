@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from data_models.models import BasePainting
 from db_access.manipulator import Manipulator
+from analyser.analyser import Analyser
 
 
 # TODO: Связать подгрузку файла модели и ядро
@@ -13,7 +14,8 @@ from db_access.manipulator import Manipulator
 
 
 api = FastAPI()
-db = Manipulator()
+#db = Manipulator()
+analyser = Analyser()
 
 
 @api.get('/')
@@ -22,5 +24,8 @@ async def get_root():
 
 
 @api.post('/analyse')
-async def analyse(painting: BasePainting):
-    return {'formatted info': f'{painting.author}, {painting.painting_name}'}
+async def analyse(new_painting):
+    try:
+        return analyser.analyse([738236, 4, 4, 2, 2500, 1990, 2])
+    except Exception as error:
+        return {'error': error.message}
