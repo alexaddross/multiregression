@@ -53,8 +53,9 @@ VLESS-клиентам идут напрямую. Если туннель упа
 ```bash
 # на ВМ Yandex Cloud
 git clone <этот-репозиторий> && cd <repo>/deploy/yandex-vless-relay
-# скопируй CA-сертификат сервера на relay (см. STRONGSWAN-SERVER.md, шаг 2):
-#   scp /etc/swanctl/x509ca/ca.pem root@<relay_ip>:/root/strongswan-ca.pem
+# скопируй CA сервера на relay (см. STRONGSWAN-SERVER.md, шаг 2). Для Let's Encrypt:
+#   cat .../isrg-root-x1.pem .../letsencrypt-r13.pem > /root/strongswan-ca.pem
+#   scp /root/strongswan-ca.pem root@<relay_ip>:/root/strongswan-ca.pem
 cp config.env.example config.env
 nano config.env            # заполни: STRONGSWAN_SERVER_ADDR, EAP_USERNAME, EAP_PASSWORD,
                            #          SERVER_ID, SERVER_CA_CERT; домен можно оставить dzen.ru

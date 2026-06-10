@@ -105,9 +105,18 @@ log "Генерация конфигов…"
 install -d /usr/local/etc/xray /etc/swanctl/conf.d /etc/swanctl/x509ca /etc/strongswan.d \
            /etc/nftables.d /etc/systemd/system/xray.service.d
 
-# CA-сертификат сервера -> swanctl проверит им сертификат strongSwan при EAP
-install -m 0644 "$SERVER_CA_CERT" /etc/swanctl/x509ca/strongswan-ca.pem
-log "CA сервера установлен: /etc/swanctl/x509ca/strongswan-ca.pem"
+# CA-сертификат(ы) сервера -> swanctl проверит ими сертификат strongSwan при EAP.
+# Файл может содержать НЕСКОЛЬКО сертификатов (корень + промежуточный) — разложим по одному.
+rm -f /etc/swanctl/x509ca/relay-ca-*.pem
+if [ "$(grep -c 'BEGIN CERTIFICATE' "$SERVER_CA_CERT")" -gt 1 ]; then
+    csplit -sz -f /etc/swanctl/x509ca/relay-ca- -b '%02d.pem' \
+           "$SERVER_CA_CERT" '/BEGIN CERTIFICATE/' '{*}'
+    chmod 0644 /etc/swanctl/x509ca/relay-ca-*.pem
+    log "CA сервера установлен (цепочка): $(ls /etc/swanctl/x509ca/relay-ca-*.pem | wc -l) cert(s)"
+else
+    install -m 0644 "$SERVER_CA_CERT" /etc/swanctl/x509ca/relay-ca-00.pem
+    log "CA сервера установлен: /etc/swanctl/x509ca/relay-ca-00.pem"
+fi
 
 render "$TPL/xray-config.template.json"        /usr/local/etc/xray/config.json
 render "$TPL/swanctl-relay.template.conf"       /etc/swanctl/conf.d/relay.conf

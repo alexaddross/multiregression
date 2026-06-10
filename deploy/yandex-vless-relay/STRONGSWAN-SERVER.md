@@ -38,21 +38,34 @@ sudo ipsec rereadsecrets
 
 ## Шаг 2. Отдать relay CA-сертификат сервера
 
-Relay по EAP всё равно обязан проверить сертификат сервера. Нужен тот самый
-**CA**, который импортируют твои обычные VPN-клиенты (на сервере это обычно
-`/etc/swanctl/x509ca/ca.pem`, либо self-signed серверный cert). Скопируй его на relay:
-```bash
-# с сервера на relay:
-scp /etc/swanctl/x509ca/ca.pem root@<relay_ip>:/root/strongswan-ca.pem
-```
-и укажи путь в `config.env` relay: `SERVER_CA_CERT="/root/strongswan-ca.pem"`.
+Relay по EAP всё равно обязан проверить сертификат сервера. Нужны те CA, что
+образуют цепочку до серверного cert.
 
-`SERVER_ID` в `config.env` должен совпасть с **SAN серверного сертификата**.
-Посмотреть SAN:
+### Let's Encrypt (cacerts = isrg-root-x1.pem + letsencrypt-r13.pem)
+Если в `ipsec.conf` стоит `leftcert=server-cert.pem` (только лист, без цепочки),
+сервер шлёт клиенту только лист — поэтому relay нужны **оба** сертификата:
+корень ISRG Root X1 **и** промежуточный R13. Собери их в один файл и скопируй:
 ```bash
-openssl x509 -in /etc/swanctl/x509certs/server.pem -noout -text | grep -A1 "Subject Alternative Name"
+cat /etc/ipsec.d/cacerts/isrg-root-x1.pem /etc/ipsec.d/cacerts/letsencrypt-r13.pem \
+    > /root/strongswan-ca.pem
+scp /root/strongswan-ca.pem root@<relay_ip>:/root/strongswan-ca.pem
 ```
-Если там IP — ставь IP сервера; если домен — домен.
+В `config.env` relay: `SERVER_CA_CERT="/root/strongswan-ca.pem"` (установщик сам
+разложит цепочку по отдельным файлам в `x509ca/`).
+
+> Можно вместо этого на сервере поменять `leftcert=server-cert.pem` на
+> `leftcert=server-fullchain.pem` (сервер начнёт слать цепочку) — тогда relay
+> хватит одного корня. Но это правка рабочего конфига, не обязательно.
+
+### Self-signed / собственный CA
+Скопируй CA-файл (флаг `CA` в `swanctl --list-certs`) или сам self-signed серверный cert.
+
+### SERVER_ID
+Должен совпасть с **SAN серверного сертификата**. Для Let's Encrypt это **домен**:
+```bash
+openssl x509 -in /etc/ipsec.d/certs/server-cert.pem -noout -ext subjectAltName
+```
+Это же значение, как правило, стоит в `leftid` твоего `/etc/ipsec.conf`.
 
 ## Шаг 3. Трафик relay уходит в XRAY автоматически
 Relay получает vIP из того же пула, что и остальные клиенты, поэтому твой
