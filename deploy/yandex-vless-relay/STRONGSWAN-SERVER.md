@@ -19,14 +19,17 @@ conn relay-yandex
     rightid=relay-yandex                      # = RELAY_IKE_ID на relay
     rightauth=psk
     rightsourceip=10.10.10.250                # = RELAY_VIP (фиксированный, в пуле)
-    rightsubnet=0.0.0.0/0
+    rightsubnet=10.10.10.250/32               # УЗКО! не 0.0.0.0/0 — иначе сервер
+                                              # завернёт чужой трафик и положит телефоны
     auto=add
     ike=aes256-sha256-modp2048!
     esp=aes256-sha256!
 ```
 
-Конкретный `rightid=relay-yandex` делает этот conn более точным, чем общий
-EAP-roadwarrior conn, поэтому при подключении relay сервер выберет именно его.
+> **Критично:** `rightsubnet` должен быть `/32` (адрес vIP relay), а НЕ `0.0.0.0/0`.
+> Широкий TS приводит к политике `0/0===0/0` — сервер заворачивает в туннель к relay
+> весь трафик, ломая форвардинг для остальных клиентов (и лочит себя). `leftsubnet`
+> остаётся `0.0.0.0/0` — это нормально (relay через сервер ходит «куда угодно»).
 
 ## Шаг 2. PSK в `/etc/ipsec.secrets`
 
