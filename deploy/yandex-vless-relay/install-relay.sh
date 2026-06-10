@@ -34,10 +34,17 @@ apt-get install -y \
     libcharon-extra-plugins libstrongswan-extra-plugins libstrongswan-standard-plugins \
     nftables curl jq qrencode openssl iproute2 ca-certificates perl
 
-# ---- 1c. Модули ядра IPsec (на части облачных образов не загружены) ----------
-# Без esp4 ядро не может поставить ESP SA: "unable to add SAD entry".
+# ---- 1c. Модули ядра IPsec (на части облачных образов заблокированы) ---------
+# Без esp4 ядро не ставит ESP SA: "unable to add SAD entry". На хардненных образах
+# модули блокируют строкой `install esp4 /bin/false` — снимаем такие блокировки.
 RELAY_KMODS="af_key esp4 esp6 ah4 xfrm_user xfrm_algo authenc"
-for m in $RELAY_KMODS; do modprobe "$m" 2>/dev/null || true; done
+KRE="$(printf '%s|' $RELAY_KMODS | sed 's/|$//')"
+grep -rlE "install +($KRE) +/bin/(false|true)" \
+     /etc/modprobe.d /usr/lib/modprobe.d /lib/modprobe.d 2>/dev/null | while read -r f; do
+    sed -ri "s@^(\s*install\s+($KRE)\s+/bin/(false|true).*)@# disabled-by-relay: \1@" "$f"
+    log "Снята блокировка IPsec-модулей в $f"
+done
+for m in $RELAY_KMODS; do modprobe --ignore-install "$m" 2>/dev/null || modprobe "$m" 2>/dev/null || true; done
 printf '%s\n' $RELAY_KMODS > /etc/modules-load.d/relay-ipsec.conf
 
 # ---- 2. XRAY ----------------------------------------------------------------
