@@ -11,8 +11,8 @@ XRAY-outbound. Цель — добавить вход, не плодя втор�
    ▼
 Yandex Cloud relay (РФ)            ← ставим этими скриптами
    │  XRAY freedom-out + sockopt.mark=42
-   │  fwmark 42 → таблица 100 → IPsec
-   │  IKEv2/IPsec full-tunnel (relay = road-warrior, получает vIP)
+   │  SNAT в vIP + mark-gated IPsec-политика (mark_in/mark_out=42)
+   │  IKEv2/IPsec (EAP, фиксированный vIP)
    ▼
 strongSwan-сервер (РФ, уже работает)
    │  существующий XRAY-outbound
@@ -20,9 +20,15 @@ strongSwan-сервер (РФ, уже работает)
 заблокированные сервисы
 ```
 
-Только помеченный трафik юзеров уходит в туннель; SSH, IKE/ESP и ответы
-VLESS-клиентам идут напрямую. Если туннель упал — `blackhole`-маршрут в таблице 100
-работает как kill-switch (прямой утечки нет).
+В туннель уходит **только** помеченный (fwmark 42) трафик юзеров — за счёт
+mark-gated IPsec-политики. SSH, ICMP, IKE/ESP и ответы VLESS-клиентам идут
+напрямую и **физически не могут** попасть в туннель, поэтому сервер не способен
+заблокировать сам себя. `charon.install_routes=no` — маршруты системы не трогаются.
+
+> **Предохранитель.** Установщик перед поднятием туннеля взводит deadman-таймер:
+> через 10 минут relay авто-откатится и вернёт прямой доступ, если ты не отменишь
+> его командой `sudo systemctl stop relay-deadman.timer`. Так первый запуск
+> безопасен, даже если конфиг неверный.
 
 > Почему скриптами, а не «зайди и настрой»: среда Claude Code здесь —
 > эфемерный контейнер без SSH-клиента и без исходящей сети, ключ в ней не живёт
@@ -78,22 +84,33 @@ openssl s_client -connect dzen.ru:443 -tls1_3 -alpn h2 </dev/null 2>/dev/null | 
 Должно быть `TLSv1.3` и `ALPN protocol: h2`. Меняется в `config.env`
 (`REALITY_DEST`, `REALITY_SERVERNAMES`) до установки.
 
-## Проверка
+## Проверка (важно — в течение 10 минут!)
+Открой **вторую** SSH-сессию (первую не закрывай) и убедись, что доступ жив. Затем:
 ```bash
 sudo ./status.sh
 ```
-- `swanctl --list-sas` → SA в состоянии `ESTABLISHED`/`INSTALLED`;
+- `swanctl --list-sas` → SA `ESTABLISHED`/`INSTALLED`;
+- vIP `RELAY_VIP` присутствует на интерфейсе;
 - внешний IP через помеченный сокет ≠ прямой IP relay и совпадает с выходом strongSwan;
 - импортируй `vless://`-ссылку в v2rayNG / NekoBox / v2rayN и проверь доступ.
 
+Если всё работает — **отмени предохранитель**, иначе через 10 мин relay откатится:
+```bash
+sudo systemctl stop relay-deadman.timer
+```
+
 ## Траблшутинг
+- **Потерял доступ после установки** → ничего не делай, через 10 мин deadman сам
+  откатит relay и вернёт SSH. (Это safety-net; в новой схеме сервер не должен
+  лочить сам себя, но предохранитель страхует от любых сюрпризов.)
 - **SA не поднимается** → не совпал логин/пароль EAP; `SERVER_ID` ≠ SAN серверного
   сертификата; не тот CA в `SERVER_CA_CERT`; либо UDP 500/4500 закрыты в security
   group. Логи: `journalctl -u strongswan -n 80` (ищи `EAP failed` / `no trusted
   certificate` / `IDr mismatch`).
-- **VLESS коннектится, но нет интернета** → туннель не INSTALLED, или сервер не
-  NAT'ит vIP relay в XRAY. Проверь `ip route show table 100` (должен быть маршрут
-  через туннель, а не только blackhole) и NAT на сервере.
+- **VLESS коннектится, но нет интернета** → (1) сервер выдал vIP, отличный от
+  `RELAY_VIP` (смотри `swanctl --list-sas`) → впиши выданный в `RELAY_VIP` и
+  переустанови; (2) сервер не NAT'ит этот vIP в XRAY; (3) нет SNAT-правила —
+  проверь `nft list table ip relay_nat`.
 - **REALITY рвётся / палится** → `REALITY_DEST` недоступен с ВМ или не TLS 1.3.
   Проверь командой `openssl s_client` выше, смени домен.
 - **Тормозит/виснут крупные страницы** → MTU. Уменьши `TUNNEL_MSS` (напр. 1300)

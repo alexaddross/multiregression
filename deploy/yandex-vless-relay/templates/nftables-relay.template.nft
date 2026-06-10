@@ -1,13 +1,21 @@
 #!/usr/sbin/nft -f
-# Рендерится в /etc/nftables.d/relay.nft (подключается из основного nftables.conf
-# либо грузится своим systemd-сервисом). Делает ТОЛЬКО MSS-clamp для трафика,
-# уходящего в IPsec-туннель, чтобы крупные TLS-пакеты не фрагментировались/не висли.
-# Намеренно НЕ трогаем основной firewall, чтобы не заблокировать SSH-доступ.
+# Рендерится в /etc/nftables.d/relay.nft (подключается из /etc/nftables.conf).
+# Делает две вещи ТОЛЬКО для помеченного (fwmark __FWMARK__) трафика, идущего в туннель:
+#   1) SNAT источника в виртуальный IP __RELAY_VIP__ (сервер ждёт трафик с адреса пула);
+#   2) MSS-clamp под MTU туннеля, чтобы крупные TLS-пакеты не висли.
+# Немаркированный трафик (SSH/ICMP/IKE) не затрагивается вообще.
 
 table inet relay_mangle {
     chain output_clamp {
         type filter hook output priority mangle; policy accept;
-        # Только помеченный (идущий в туннель) TCP-трафик: зажать MSS под MTU туннеля
         meta mark __FWMARK__ tcp flags syn tcp option maxseg size set __TUNNEL_MSS__
+    }
+}
+
+table ip relay_nat {
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+        # SNAT только помеченного трафика в фиксированный vIP (до XFRM-шифрования)
+        meta mark __FWMARK__ ip saddr != __RELAY_VIP__ snat to __RELAY_VIP__
     }
 }

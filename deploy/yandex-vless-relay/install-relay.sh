@@ -81,8 +81,8 @@ VLESS_UUID="$VLESS_UUID"
 REALITY_PRIVATE_KEY="$REALITY_PRIVATE_KEY"
 REALITY_PUBLIC_KEY="$REALITY_PUBLIC_KEY"
 REALITY_SHORT_ID="$REALITY_SHORT_ID"
+RELAY_VIP="${RELAY_VIP:-10.10.10.250}"
 FWMARK="${FWMARK:-42}"
-ROUTE_TABLE="${ROUTE_TABLE:-100}"
 TUNNEL_MSS="${TUNNEL_MSS:-1360}"
 WAN_IF="${WAN_IF:-auto}"
 RELAY_PUBLIC_IP="$RELAY_PUBLIC_IP"
@@ -94,7 +94,7 @@ render() {  # render <tpl> <out> ; подстановка __NAME__ из теку
     local tpl="$1" out="$2"
     cp "$tpl" "$out.tmp"
     for name in XRAY_PORT VLESS_UUID REALITY_DEST REALITY_SERVERNAMES \
-                REALITY_PRIVATE_KEY REALITY_SHORT_ID FWMARK ROUTE_TABLE \
+                REALITY_PRIVATE_KEY REALITY_SHORT_ID FWMARK RELAY_VIP \
                 TUNNEL_MSS STRONGSWAN_SERVER_ADDR EAP_USERNAME EAP_PASSWORD SERVER_ID; do
         VAL="${!name}" perl -i -pe "s/__${name}__/\$ENV{VAL}/g" "$out.tmp"
     done
@@ -126,7 +126,8 @@ chmod 600 /etc/swanctl/conf.d/relay.conf
 
 cp "$TPL/xray-override.conf"   /etc/systemd/system/xray.service.d/override.conf
 cp "$TPL/relay-routing.service" /etc/systemd/system/relay-routing.service
-install -m 0755 "$HERE/relay-routing.sh" /usr/local/sbin/relay-routing.sh
+install -m 0755 "$HERE/relay-routing.sh"  /usr/local/sbin/relay-routing.sh
+install -m 0755 "$HERE/relay-deadman.sh"  /usr/local/sbin/relay-deadman.sh
 
 # nftables: подключаем наш файл из основного конфига
 if ! grep -q '/etc/nftables.d/relay.nft' /etc/nftables.conf 2>/dev/null; then
@@ -141,7 +142,17 @@ net.ipv4.conf.default.rp_filter = 2
 EOF
 sysctl -q --system || true
 
-# ---- 7. Запуск служб --------------------------------------------------------
+# ---- 7. ПРЕДОХРАНИТЕЛЬ (deadman) до поднятия туннеля -------------------------
+# Если что-то пойдёт не так и связь пропадёт — через 10 минут relay сам откатится
+# и вернёт прямой доступ. Отменишь вручную, когда убедишься, что всё работает.
+DEADMAN_MIN="${DEADMAN_MIN:-10}"
+systemctl stop relay-deadman.timer 2>/dev/null || true
+systemd-run --on-active="${DEADMAN_MIN}min" --unit=relay-deadman \
+    --description="relay deadman auto-rollback" \
+    /usr/local/sbin/relay-deadman.sh >/dev/null 2>&1 || true
+log "Взведён предохранитель: авто-откат через ${DEADMAN_MIN} мин, если не отменить."
+
+# ---- 8. Запуск служб --------------------------------------------------------
 log "Запуск служб…"
 systemctl daemon-reload
 systemctl enable --now nftables
@@ -157,10 +168,19 @@ swanctl --initiate --child tunnel 2>/dev/null || true
 systemctl enable xray
 systemctl restart xray
 
-# ---- 8. Итог ----------------------------------------------------------------
+# ---- 9. Итог ----------------------------------------------------------------
 log "Готово. Состояние сохранено в $STATE"
 echo
 "$HERE/make-client-link.sh" || true
 echo
-log "Проверка статуса:   sudo $HERE/status.sh"
-log "На strongSwan-сервере заведи EAP-юзера '$EAP_USERNAME' (см. STRONGSWAN-SERVER.md)."
+printf '\033[1;33m%s\033[0m\n' "================== ВАЖНО: ПРЕДОХРАНИТЕЛЬ ВЗВЕДЁН =================="
+echo "Через ${DEADMAN_MIN} минут relay АВТОМАТИЧЕСКИ отключится и вернёт прямой доступ,"
+echo "если ты не отменишь предохранитель. Сначала убедись, что:"
+echo "  1) SSH к серверу по-прежнему жив (открой ВТОРУЮ сессию, не закрывая эту);"
+echo "  2) туннель поднялся:   sudo $HERE/status.sh"
+echo "Если всё ок — ОТМЕНИ авто-откат:"
+printf '   \033[1;32msudo systemctl stop relay-deadman.timer\033[0m\n'
+echo "Если связь пропала — просто подожди ${DEADMAN_MIN} мин, доступ вернётся сам."
+printf '\033[1;33m%s\033[0m\n' "=================================================================="
+echo
+log "На strongSwan-сервере заведи EAP-юзера '$EAP_USERNAME' и закрепи vIP $RELAY_VIP (см. STRONGSWAN-SERVER.md)."
