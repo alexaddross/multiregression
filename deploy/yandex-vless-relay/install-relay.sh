@@ -28,8 +28,10 @@ log() { printf '\033[1;36m[relay]\033[0m %s\n' "$*"; }
 log "Установка пакетов…"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
-apt-get install -y --no-install-recommends \
-    strongswan strongswan-swanctl libcharon-extra-plugins \
+# Без --no-install-recommends: нужны плагины eap-mschapv2 + md4 (libcharon/libstrongswan-extra)
+apt-get install -y \
+    strongswan strongswan-swanctl \
+    libcharon-extra-plugins libstrongswan-extra-plugins libstrongswan-standard-plugins \
     nftables curl jq qrencode openssl iproute2 ca-certificates perl
 
 # ---- 2. XRAY ----------------------------------------------------------------
