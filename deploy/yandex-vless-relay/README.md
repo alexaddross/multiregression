@@ -46,22 +46,26 @@ VLESS-клиентам идут напрямую. Если туннель упа
    - входящий **TCP 22** — со своего IP (управление);
    - исходящий **UDP 500 и 4500** к IP strongSwan-сервера (IKE/IPsec, encap=yes);
    - исходящий к `REALITY_DEST` (443) — для REALITY-handshake.
-3. Доступ к настройке существующего strongSwan-сервера (добавить одного peer).
+3. На strongSwan: **EAP-учётка** для relay (логин/пароль) + его **CA-сертификат**
+   (см. `STRONGSWAN-SERVER.md`). Учётку можно переиспользовать существующую.
 
 ## Установка
 ```bash
 # на ВМ Yandex Cloud
 git clone <этот-репозиторий> && cd <repo>/deploy/yandex-vless-relay
+# скопируй CA-сертификат сервера на relay (см. STRONGSWAN-SERVER.md, шаг 2):
+#   scp /etc/swanctl/x509ca/ca.pem root@<relay_ip>:/root/strongswan-ca.pem
 cp config.env.example config.env
-nano config.env            # минимум: STRONGSWAN_SERVER_ADDR; домен можно оставить dzen.ru
+nano config.env            # заполни: STRONGSWAN_SERVER_ADDR, EAP_USERNAME, EAP_PASSWORD,
+                           #          SERVER_ID, SERVER_CA_CERT; домен можно оставить dzen.ru
 sudo ./install-relay.sh
 ```
-Скрипт сам сгенерирует UUID, ключи REALITY (x25519), shortId и PSK, сохранит их в
-`/etc/yandex-relay/state.env`, поднимет XRAY + strongSwan + маршрутизацию и в конце
-напечатает клиентскую `vless://`-ссылку с QR.
+Скрипт сам сгенерирует UUID, ключи REALITY (x25519) и shortId, сохранит состояние в
+`/etc/yandex-relay/state.env`, поднимет XRAY + strongSwan (EAP-клиент) + маршрутизацию
+и в конце напечатает клиентскую `vless://`-ссылку с QR.
 
-Затем на **strongSwan-сервере** добавь peer'а по `STRONGSWAN-SERVER.md`
-(PSK возьми из `/etc/yandex-relay/state.env`).
+Затем на **strongSwan-сервере** заведи EAP-юзера по `STRONGSWAN-SERVER.md`
+(логин/пароль = `EAP_USERNAME`/`EAP_PASSWORD` из `config.env`).
 
 ## Домен-маскировка (REALITY)
 По требованию — домен из «белых списков» РФ, чтобы ТСПУ не резало. Дефолт `dzen.ru`
@@ -82,8 +86,10 @@ sudo ./status.sh
 - импортируй `vless://`-ссылку в v2rayNG / NekoBox / v2rayN и проверь доступ.
 
 ## Траблшутинг
-- **SA не поднимается** → PSK/ID на relay и сервере не совпали, либо UDP 500/4500
-  закрыты в security group. Логи: `journalctl -u strongswan -n 80`.
+- **SA не поднимается** → не совпал логин/пароль EAP; `SERVER_ID` ≠ SAN серверного
+  сертификата; не тот CA в `SERVER_CA_CERT`; либо UDP 500/4500 закрыты в security
+  group. Логи: `journalctl -u strongswan -n 80` (ищи `EAP failed` / `no trusted
+  certificate` / `IDr mismatch`).
 - **VLESS коннектится, но нет интернета** → туннель не INSTALLED, или сервер не
   NAT'ит vIP relay в XRAY. Проверь `ip route show table 100` (должен быть маршрут
   через туннель, а не только blackhole) и NAT на сервере.
@@ -93,6 +99,6 @@ sudo ./status.sh
   в `config.env` и переустанови, либо поправь `/etc/nftables.d/relay.nft`.
 
 ## Безопасность
-- `state.env` (PSK, приватный ключ REALITY) — `chmod 600`, не коммить.
+- `state.env` (пароль EAP, приватный ключ REALITY) — `chmod 600`, не коммить.
 - Ограничь SSH своим IP; на 443 — только REALITY.
 - Это инфраструктура для собственного доступа; используй ответственно и легально.

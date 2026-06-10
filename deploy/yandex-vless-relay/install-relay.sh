@@ -40,11 +40,21 @@ else
     log "XRAY уже установлен: $(xray version | head -1)"
 fi
 
-# ---- 3. Секреты (генерируем недостающие) ------------------------------------
+# ---- 3a. Проверка EAP-параметров (их знает твой strongSwan) -----------------
+: "${EAP_USERNAME:?Укажи EAP_USERNAME в config.env}"
+: "${EAP_PASSWORD:?Укажи EAP_PASSWORD в config.env}"
+: "${SERVER_ID:?Укажи SERVER_ID (SAN серверного сертификата) в config.env}"
+if [ -z "${SERVER_CA_CERT:-}" ] || [ ! -r "${SERVER_CA_CERT:-}" ]; then
+    echo "Не найден CA-сертификат сервера: SERVER_CA_CERT='${SERVER_CA_CERT:-}'"
+    echo "EAP требует проверки сертификата сервера. Скопируй CA (или серверный/self-signed"
+    echo "cert, который импортируют VPN-клиенты) на relay и укажи путь в config.env."
+    exit 1
+fi
+
+# ---- 3b. Секреты VLESS/REALITY (генерируем недостающие) ----------------------
 log "Подготовка секретов…"
 [ -n "${VLESS_UUID:-}" ]      || VLESS_UUID="$(xray uuid)"
 [ -n "${REALITY_SHORT_ID:-}" ] || REALITY_SHORT_ID="$(openssl rand -hex 8)"
-[ -n "${IPSEC_PSK:-}" ]       || IPSEC_PSK="$(openssl rand -hex 32)"
 if [ -z "${REALITY_PRIVATE_KEY:-}" ] || [ -z "${REALITY_PUBLIC_KEY:-}" ]; then
     KP="$(xray x25519)"
     REALITY_PRIVATE_KEY="$(printf '%s\n' "$KP" | awk -F': *' '/[Pp]rivate/{print $2}' | tr -d '[:space:]')"
@@ -60,9 +70,10 @@ mkdir -p "$STATE_DIR"; chmod 700 "$STATE_DIR"
 cat > "$STATE" <<EOF
 # Сгенерировано install-relay.sh $(date -u +%FT%TZ)
 STRONGSWAN_SERVER_ADDR="$STRONGSWAN_SERVER_ADDR"
-RELAY_IKE_ID="$RELAY_IKE_ID"
-SERVER_IKE_ID="$SERVER_IKE_ID"
-IPSEC_PSK="$IPSEC_PSK"
+EAP_USERNAME="$EAP_USERNAME"
+EAP_PASSWORD="$EAP_PASSWORD"
+SERVER_ID="$SERVER_ID"
+SERVER_CA_CERT="$SERVER_CA_CERT"
 XRAY_PORT="$XRAY_PORT"
 REALITY_DEST="$REALITY_DEST"
 REALITY_SERVERNAMES="$REALITY_SERVERNAMES"
@@ -84,15 +95,19 @@ render() {  # render <tpl> <out> ; подстановка __NAME__ из теку
     cp "$tpl" "$out.tmp"
     for name in XRAY_PORT VLESS_UUID REALITY_DEST REALITY_SERVERNAMES \
                 REALITY_PRIVATE_KEY REALITY_SHORT_ID FWMARK ROUTE_TABLE \
-                TUNNEL_MSS STRONGSWAN_SERVER_ADDR RELAY_IKE_ID SERVER_IKE_ID IPSEC_PSK; do
+                TUNNEL_MSS STRONGSWAN_SERVER_ADDR EAP_USERNAME EAP_PASSWORD SERVER_ID; do
         VAL="${!name}" perl -i -pe "s/__${name}__/\$ENV{VAL}/g" "$out.tmp"
     done
     mv "$out.tmp" "$out"
 }
 
 log "Генерация конфигов…"
-install -d /usr/local/etc/xray /etc/swanctl/conf.d /etc/strongswan.d \
+install -d /usr/local/etc/xray /etc/swanctl/conf.d /etc/swanctl/x509ca /etc/strongswan.d \
            /etc/nftables.d /etc/systemd/system/xray.service.d
+
+# CA-сертификат сервера -> swanctl проверит им сертификат strongSwan при EAP
+install -m 0644 "$SERVER_CA_CERT" /etc/swanctl/x509ca/strongswan-ca.pem
+log "CA сервера установлен: /etc/swanctl/x509ca/strongswan-ca.pem"
 
 render "$TPL/xray-config.template.json"        /usr/local/etc/xray/config.json
 render "$TPL/swanctl-relay.template.conf"       /etc/swanctl/conf.d/relay.conf
@@ -139,4 +154,4 @@ echo
 "$HERE/make-client-link.sh" || true
 echo
 log "Проверка статуса:   sudo $HERE/status.sh"
-log "На strongSwan-сервере добавь peer (см. STRONGSWAN-SERVER.md). PSK уже в $STATE."
+log "На strongSwan-сервере заведи EAP-юзера '$EAP_USERNAME' (см. STRONGSWAN-SERVER.md)."
