@@ -34,6 +34,12 @@ apt-get install -y \
     libcharon-extra-plugins libstrongswan-extra-plugins libstrongswan-standard-plugins \
     nftables curl jq qrencode openssl iproute2 ca-certificates perl
 
+# ---- 1c. Модули ядра IPsec (на части облачных образов не загружены) ----------
+# Без esp4 ядро не может поставить ESP SA: "unable to add SAD entry".
+RELAY_KMODS="af_key esp4 esp6 ah4 xfrm_user xfrm_algo authenc"
+for m in $RELAY_KMODS; do modprobe "$m" 2>/dev/null || true; done
+printf '%s\n' $RELAY_KMODS > /etc/modules-load.d/relay-ipsec.conf
+
 # ---- 2. XRAY ----------------------------------------------------------------
 if ! command -v xray >/dev/null 2>&1; then
     log "Установка XRAY-core (официальный installer)…"
