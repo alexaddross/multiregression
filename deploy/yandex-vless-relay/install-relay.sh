@@ -34,6 +34,14 @@ apt-get install -y \
     libcharon-extra-plugins libstrongswan-extra-plugins libstrongswan-standard-plugins \
     nftables curl jq qrencode openssl iproute2 ca-certificates perl
 
+# ---- 1b. Включить md4 (NT-hash) — нужен для EAP-MSCHAPv2 ---------------------
+# В Ubuntu md4 по умолчанию load=no, из-за чего eap-mschapv2 не грузится.
+if [ -d /etc/strongswan.d/charon ]; then
+    printf 'md4 {\n    load = yes\n}\n' > /etc/strongswan.d/charon/md4.conf
+    [ -f /etc/strongswan.d/charon/eap-mschapv2.conf ] && \
+        sed -i 's/load = no/load = yes/' /etc/strongswan.d/charon/eap-mschapv2.conf
+fi
+
 # ---- 2. XRAY ----------------------------------------------------------------
 if ! command -v xray >/dev/null 2>&1; then
     log "Установка XRAY-core (официальный installer)…"
@@ -172,7 +180,9 @@ systemctl enable --now relay-routing.service
 
 SS_SVC="strongswan"
 systemctl list-unit-files | grep -q '^strongswan.service' || SS_SVC="strongswan-starter"
-systemctl enable --now "$SS_SVC"
+systemctl enable "$SS_SVC"
+systemctl restart "$SS_SVC"   # restart (не enable --now): подхватить md4 в charon
+sleep 2
 swanctl --load-all
 swanctl --initiate --child tunnel 2>/dev/null || true
 
