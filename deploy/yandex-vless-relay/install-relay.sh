@@ -40,10 +40,19 @@ else
     log "XRAY уже установлен: $(xray version | head -1)"
 fi
 
-# ---- 3a. Проверка EAP-параметров (их знает твой strongSwan) -----------------
+# ---- 3a. Проверка/нормализация параметров -----------------------------------
+: "${STRONGSWAN_SERVER_ADDR:?Укажи STRONGSWAN_SERVER_ADDR в config.env}"
 : "${EAP_USERNAME:?Укажи EAP_USERNAME в config.env}"
 : "${EAP_PASSWORD:?Укажи EAP_PASSWORD в config.env}"
 : "${SERVER_ID:?Укажи SERVER_ID (SAN серверного сертификата) в config.env}"
+# Дефолты для необязательных полей (чтобы рендер под set -u не падал)
+XRAY_PORT="${XRAY_PORT:-443}"
+REALITY_DEST="${REALITY_DEST:-dzen.ru:443}"
+REALITY_SERVERNAMES="${REALITY_SERVERNAMES:-dzen.ru}"
+RELAY_VIP="${RELAY_VIP:-10.10.10.250}"
+FWMARK="${FWMARK:-42}"
+TUNNEL_MSS="${TUNNEL_MSS:-1360}"
+WAN_IF="${WAN_IF:-auto}"
 if [ -z "${SERVER_CA_CERT:-}" ] || [ ! -r "${SERVER_CA_CERT:-}" ]; then
     echo "Не найден CA-сертификат сервера: SERVER_CA_CERT='${SERVER_CA_CERT:-}'"
     echo "EAP требует проверки сертификата сервера. Скопируй CA (или серверный/self-signed"
