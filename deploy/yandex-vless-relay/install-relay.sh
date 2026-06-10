@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+# =============================================================================
+#  Установщик relay: XRAY VLESS+REALITY (вход) -> IPsec-туннель к strongSwan.
+#  Запускать НА ВМ Yandex Cloud (Ubuntu 22.04/24.04) от root:
+#      sudo ./install-relay.sh [path/to/config.env]
+# =============================================================================
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TPL="$HERE/templates"
+STATE_DIR="/etc/yandex-relay"
+STATE="$STATE_DIR/state.env"
+
+[ "$(id -u)" = "0" ] || { echo "Запусти от root (sudo)."; exit 1; }
+
+CFG="${1:-$HERE/config.env}"
+if [ ! -r "$CFG" ]; then
+    echo "Нет config.env. Скопируй пример и заполни:"
+    echo "    cp $HERE/config.env.example $HERE/config.env && nano $HERE/config.env"
+    exit 1
+fi
+# shellcheck disable=SC1090
+. "$CFG"
+
+log() { printf '\033[1;36m[relay]\033[0m %s\n' "$*"; }
+
+# ---- 1. Пакеты --------------------------------------------------------------
+log "Установка пакетов…"
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -y
+apt-get install -y --no-install-recommends \
+    strongswan strongswan-swanctl libcharon-extra-plugins \
+    nftables curl jq qrencode openssl iproute2 ca-certificates perl
+
+# ---- 2. XRAY ----------------------------------------------------------------
+if ! command -v xray >/dev/null 2>&1; then
+    log "Установка XRAY-core (официальный installer)…"
+    bash -c "$(curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
+else
+    log "XRAY уже установлен: $(xray version | head -1)"
+fi
+
+# ---- 3. Секреты (генерируем недостающие) ------------------------------------
+log "Подготовка секретов…"
+[ -n "${VLESS_UUID:-}" ]      || VLESS_UUID="$(xray uuid)"
+[ -n "${REALITY_SHORT_ID:-}" ] || REALITY_SHORT_ID="$(openssl rand -hex 8)"
+[ -n "${IPSEC_PSK:-}" ]       || IPSEC_PSK="$(openssl rand -hex 32)"
+if [ -z "${REALITY_PRIVATE_KEY:-}" ] || [ -z "${REALITY_PUBLIC_KEY:-}" ]; then
+    KP="$(xray x25519)"
+    REALITY_PRIVATE_KEY="$(printf '%s\n' "$KP" | awk -F': *' '/[Pp]rivate/{print $2}' | tr -d '[:space:]')"
+    REALITY_PUBLIC_KEY="$(printf '%s\n'  "$KP" | awk -F': *' '/[Pp]ublic/{print  $2}' | tr -d '[:space:]')"
+fi
+
+# Определяем публичный IP relay (для клиентской ссылки)
+RELAY_PUBLIC_IP="$(curl -fsS4 https://api.ipify.org 2>/dev/null || \
+                   ip -o -4 route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')"
+
+# ---- 4. Сохраняем состояние -------------------------------------------------
+mkdir -p "$STATE_DIR"; chmod 700 "$STATE_DIR"
+cat > "$STATE" <<EOF
+# Сгенерировано install-relay.sh $(date -u +%FT%TZ)
+STRONGSWAN_SERVER_ADDR="$STRONGSWAN_SERVER_ADDR"
+RELAY_IKE_ID="$RELAY_IKE_ID"
+SERVER_IKE_ID="$SERVER_IKE_ID"
+IPSEC_PSK="$IPSEC_PSK"
+XRAY_PORT="$XRAY_PORT"
+REALITY_DEST="$REALITY_DEST"
+REALITY_SERVERNAMES="$REALITY_SERVERNAMES"
+VLESS_UUID="$VLESS_UUID"
+REALITY_PRIVATE_KEY="$REALITY_PRIVATE_KEY"
+REALITY_PUBLIC_KEY="$REALITY_PUBLIC_KEY"
+REALITY_SHORT_ID="$REALITY_SHORT_ID"
+FWMARK="${FWMARK:-42}"
+ROUTE_TABLE="${ROUTE_TABLE:-100}"
+TUNNEL_MSS="${TUNNEL_MSS:-1360}"
+WAN_IF="${WAN_IF:-auto}"
+RELAY_PUBLIC_IP="$RELAY_PUBLIC_IP"
+EOF
+chmod 600 "$STATE"
+
+# ---- 5. Рендер шаблонов -----------------------------------------------------
+render() {  # render <tpl> <out> ; подстановка __NAME__ из текущего окружения
+    local tpl="$1" out="$2"
+    cp "$tpl" "$out.tmp"
+    for name in XRAY_PORT VLESS_UUID REALITY_DEST REALITY_SERVERNAMES \
+                REALITY_PRIVATE_KEY REALITY_SHORT_ID FWMARK ROUTE_TABLE \
+                TUNNEL_MSS STRONGSWAN_SERVER_ADDR RELAY_IKE_ID SERVER_IKE_ID IPSEC_PSK; do
+        VAL="${!name}" perl -i -pe "s/__${name}__/\$ENV{VAL}/g" "$out.tmp"
+    done
+    mv "$out.tmp" "$out"
+}
+
+log "Генерация конфигов…"
+install -d /usr/local/etc/xray /etc/swanctl/conf.d /etc/strongswan.d \
+           /etc/nftables.d /etc/systemd/system/xray.service.d
+
+render "$TPL/xray-config.template.json"        /usr/local/etc/xray/config.json
+render "$TPL/swanctl-relay.template.conf"       /etc/swanctl/conf.d/relay.conf
+render "$TPL/strongswan-routing.template.conf"  /etc/strongswan.d/99-relay-routing.conf
+render "$TPL/nftables-relay.template.nft"       /etc/nftables.d/relay.nft
+chmod 600 /etc/swanctl/conf.d/relay.conf
+
+cp "$TPL/xray-override.conf"   /etc/systemd/system/xray.service.d/override.conf
+cp "$TPL/relay-routing.service" /etc/systemd/system/relay-routing.service
+install -m 0755 "$HERE/relay-routing.sh" /usr/local/sbin/relay-routing.sh
+
+# nftables: подключаем наш файл из основного конфига
+if ! grep -q '/etc/nftables.d/relay.nft' /etc/nftables.conf 2>/dev/null; then
+    echo 'include "/etc/nftables.d/relay.nft"' >> /etc/nftables.conf
+fi
+
+# ---- 6. sysctl --------------------------------------------------------------
+cat > /etc/sysctl.d/99-relay.conf <<'EOF'
+net.ipv4.ip_forward = 1
+net.ipv4.conf.all.rp_filter = 2
+net.ipv4.conf.default.rp_filter = 2
+EOF
+sysctl -q --system || true
+
+# ---- 7. Запуск служб --------------------------------------------------------
+log "Запуск служб…"
+systemctl daemon-reload
+systemctl enable --now nftables
+nft -f /etc/nftables.conf
+systemctl enable --now relay-routing.service
+
+SS_SVC="strongswan"
+systemctl list-unit-files | grep -q '^strongswan.service' || SS_SVC="strongswan-starter"
+systemctl enable --now "$SS_SVC"
+swanctl --load-all
+swanctl --initiate --child tunnel 2>/dev/null || true
+
+systemctl enable xray
+systemctl restart xray
+
+# ---- 8. Итог ----------------------------------------------------------------
+log "Готово. Состояние сохранено в $STATE"
+echo
+"$HERE/make-client-link.sh" || true
+echo
+log "Проверка статуса:   sudo $HERE/status.sh"
+log "На strongSwan-сервере добавь peer (см. STRONGSWAN-SERVER.md). PSK уже в $STATE."

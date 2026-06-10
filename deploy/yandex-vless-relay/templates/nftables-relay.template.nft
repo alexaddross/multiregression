@@ -1,0 +1,13 @@
+#!/usr/sbin/nft -f
+# Рендерится в /etc/nftables.d/relay.nft (подключается из основного nftables.conf
+# либо грузится своим systemd-сервисом). Делает ТОЛЬКО MSS-clamp для трафика,
+# уходящего в IPsec-туннель, чтобы крупные TLS-пакеты не фрагментировались/не висли.
+# Намеренно НЕ трогаем основной firewall, чтобы не заблокировать SSH-доступ.
+
+table inet relay_mangle {
+    chain output_clamp {
+        type filter hook output priority mangle; policy accept;
+        # Только помеченный (идущий в туннель) TCP-трафик: зажать MSS под MTU туннеля
+        meta mark __FWMARK__ tcp flags syn tcp option maxseg size set __TUNNEL_MSS__
+    }
+}

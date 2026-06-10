@@ -1,0 +1,15 @@
+[Unit]
+Description=Relay policy routing for IPsec tunnel (fwmark -> dedicated table)
+After=network-online.target nftables.service
+Wants=network-online.target
+Before=xray.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=/etc/yandex-relay/state.env
+ExecStart=/usr/local/sbin/relay-routing.sh up
+ExecStop=/usr/local/sbin/relay-routing.sh down
+
+[Install]
+WantedBy=multi-user.target
