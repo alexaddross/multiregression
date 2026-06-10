@@ -52,8 +52,8 @@ mark-gated IPsec-политики. SSH, ICMP, IKE/ESP и ответы VLESS-кл
    - входящий **TCP 22** — со своего IP (управление);
    - исходящий **UDP 500 и 4500** к IP strongSwan-сервера (IKE/IPsec, encap=yes);
    - исходящий к `REALITY_DEST` (443) — для REALITY-handshake.
-3. На strongSwan: **EAP-учётка** для relay (логин/пароль) + его **CA-сертификат**
-   (см. `STRONGSWAN-SERVER.md`). Учётку можно переиспользовать существующую.
+3. На strongSwan: **отдельный PSK-conn** для relay + его **CA-сертификат(ы)**
+   (см. `STRONGSWAN-SERVER.md`). Существующие EAP-клиенты не затрагиваются.
 
 ## Установка
 ```bash
@@ -63,16 +63,16 @@ git clone <этот-репозиторий> && cd <repo>/deploy/yandex-vless-rel
 #   cat .../isrg-root-x1.pem .../letsencrypt-r13.pem > /root/strongswan-ca.pem
 #   scp /root/strongswan-ca.pem root@<relay_ip>:/root/strongswan-ca.pem
 cp config.env.example config.env
-nano config.env            # заполни: STRONGSWAN_SERVER_ADDR, EAP_USERNAME, EAP_PASSWORD,
-                           #          SERVER_ID, SERVER_CA_CERT; домен можно оставить dzen.ru
+nano config.env            # заполни: STRONGSWAN_SERVER_ADDR, RELAY_IKE_ID, SERVER_ID,
+                           #          SERVER_CA_CERT, RELAY_VIP; домен можно оставить dzen.ru
 sudo ./install-relay.sh
 ```
-Скрипт сам сгенерирует UUID, ключи REALITY (x25519) и shortId, сохранит состояние в
-`/etc/yandex-relay/state.env`, поднимет XRAY + strongSwan (EAP-клиент) + маршрутизацию
-и в конце напечатает клиентскую `vless://`-ссылку с QR.
+Скрипт сам сгенерирует PSK, UUID, ключи REALITY (x25519) и shortId, сохранит состояние в
+`/etc/yandex-relay/state.env`, поднимет XRAY + strongSwan (PSK-клиент) + маршрутизацию
+и в конце напечатает клиентскую `vless://`-ссылку и сгенерированный PSK.
 
-Затем на **strongSwan-сервере** заведи EAP-юзера по `STRONGSWAN-SERVER.md`
-(логин/пароль = `EAP_USERNAME`/`EAP_PASSWORD` из `config.env`).
+Затем на **strongSwan-сервере** добавь PSK-conn по `STRONGSWAN-SERVER.md`
+(PSK возьми из `/etc/yandex-relay/state.env`).
 
 ## Домен-маскировка (REALITY)
 По требованию — домен из «белых списков» РФ, чтобы ТСПУ не резало. Дефолт `dzen.ru`
@@ -103,10 +103,11 @@ sudo systemctl stop relay-deadman.timer
 - **Потерял доступ после установки** → ничего не делай, через 10 мин deadman сам
   откатит relay и вернёт SSH. (Это safety-net; в новой схеме сервер не должен
   лочить сам себя, но предохранитель страхует от любых сюрпризов.)
-- **SA не поднимается** → не совпал логин/пароль EAP; `SERVER_ID` ≠ SAN серверного
-  сертификата; не тот CA в `SERVER_CA_CERT`; либо UDP 500/4500 закрыты в security
-  group. Логи: `journalctl -u strongswan -n 80` (ищи `EAP failed` / `no trusted
-  certificate` / `IDr mismatch`).
+- **SA не поднимается** → не совпал PSK (relay vs `/etc/ipsec.secrets`); `SERVER_ID`
+  ≠ SAN серверного сертификата; не тот CA в `SERVER_CA_CERT`; relay попал в общий
+  EAP-conn вместо PSK-conn (проверь `rightid`); либо UDP 500/4500 закрыты в security
+  group. Логи: `journalctl -u strongswan-starter -n 80` (ищи `no trusted certificate`
+  / `IDr mismatch` / `no matching peer config` / `AUTHENTICATION_FAILED`).
 - **VLESS коннектится, но нет интернета** → (1) сервер выдал vIP, отличный от
   `RELAY_VIP` (смотри `swanctl --list-sas`) → впиши выданный в `RELAY_VIP` и
   переустанови; (2) сервер не NAT'ит этот vIP в XRAY; (3) нет SNAT-правила —

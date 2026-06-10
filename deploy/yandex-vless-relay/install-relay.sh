@@ -34,14 +34,6 @@ apt-get install -y \
     libcharon-extra-plugins libstrongswan-extra-plugins libstrongswan-standard-plugins \
     nftables curl jq qrencode openssl iproute2 ca-certificates perl
 
-# ---- 1b. Включить md4 (NT-hash) — нужен для EAP-MSCHAPv2 ---------------------
-# В Ubuntu md4 по умолчанию load=no, из-за чего eap-mschapv2 не грузится.
-if [ -d /etc/strongswan.d/charon ]; then
-    printf 'md4 {\n    load = yes\n}\n' > /etc/strongswan.d/charon/md4.conf
-    [ -f /etc/strongswan.d/charon/eap-mschapv2.conf ] && \
-        sed -i 's/load = no/load = yes/' /etc/strongswan.d/charon/eap-mschapv2.conf
-fi
-
 # ---- 2. XRAY ----------------------------------------------------------------
 if ! command -v xray >/dev/null 2>&1; then
     log "Установка XRAY-core (официальный installer)…"
@@ -52,10 +44,9 @@ fi
 
 # ---- 3a. Проверка/нормализация параметров -----------------------------------
 : "${STRONGSWAN_SERVER_ADDR:?Укажи STRONGSWAN_SERVER_ADDR в config.env}"
-: "${EAP_USERNAME:?Укажи EAP_USERNAME в config.env}"
-: "${EAP_PASSWORD:?Укажи EAP_PASSWORD в config.env}"
 : "${SERVER_ID:?Укажи SERVER_ID (SAN серверного сертификата) в config.env}"
 # Дефолты для необязательных полей (чтобы рендер под set -u не падал)
+RELAY_IKE_ID="${RELAY_IKE_ID:-relay-yandex}"
 XRAY_PORT="${XRAY_PORT:-443}"
 REALITY_DEST="${REALITY_DEST:-dzen.ru:443}"
 REALITY_SERVERNAMES="${REALITY_SERVERNAMES:-dzen.ru}"
@@ -65,13 +56,13 @@ TUNNEL_MSS="${TUNNEL_MSS:-1360}"
 WAN_IF="${WAN_IF:-auto}"
 if [ -z "${SERVER_CA_CERT:-}" ] || [ ! -r "${SERVER_CA_CERT:-}" ]; then
     echo "Не найден CA-сертификат сервера: SERVER_CA_CERT='${SERVER_CA_CERT:-}'"
-    echo "EAP требует проверки сертификата сервера. Скопируй CA (или серверный/self-signed"
-    echo "cert, который импортируют VPN-клиенты) на relay и укажи путь в config.env."
+    echo "Relay проверяет сертификат сервера. Скопируй CA-цепочку на relay и укажи путь."
     exit 1
 fi
 
-# ---- 3b. Секреты VLESS/REALITY (генерируем недостающие) ----------------------
+# ---- 3b. Секреты (генерируем недостающие) -----------------------------------
 log "Подготовка секретов…"
+[ -n "${IPSEC_PSK:-}" ]       || IPSEC_PSK="$(openssl rand -hex 32)"
 [ -n "${VLESS_UUID:-}" ]      || VLESS_UUID="$(xray uuid)"
 [ -n "${REALITY_SHORT_ID:-}" ] || REALITY_SHORT_ID="$(openssl rand -hex 8)"
 if [ -z "${REALITY_PRIVATE_KEY:-}" ] || [ -z "${REALITY_PUBLIC_KEY:-}" ]; then
@@ -89,8 +80,8 @@ mkdir -p "$STATE_DIR"; chmod 700 "$STATE_DIR"
 cat > "$STATE" <<EOF
 # Сгенерировано install-relay.sh $(date -u +%FT%TZ)
 STRONGSWAN_SERVER_ADDR="$STRONGSWAN_SERVER_ADDR"
-EAP_USERNAME="$EAP_USERNAME"
-EAP_PASSWORD="$EAP_PASSWORD"
+RELAY_IKE_ID="$RELAY_IKE_ID"
+IPSEC_PSK="$IPSEC_PSK"
 SERVER_ID="$SERVER_ID"
 SERVER_CA_CERT="$SERVER_CA_CERT"
 XRAY_PORT="$XRAY_PORT"
@@ -114,7 +105,7 @@ render() {  # render <tpl> <out> ; подстановка __NAME__ из теку
     cp "$tpl" "$out.tmp"
     for name in XRAY_PORT VLESS_UUID REALITY_DEST REALITY_SERVERNAMES \
                 REALITY_PRIVATE_KEY REALITY_SHORT_ID FWMARK RELAY_VIP \
-                TUNNEL_MSS STRONGSWAN_SERVER_ADDR EAP_USERNAME EAP_PASSWORD SERVER_ID; do
+                TUNNEL_MSS STRONGSWAN_SERVER_ADDR RELAY_IKE_ID IPSEC_PSK SERVER_ID; do
         VAL="${!name}" perl -i -pe "s/__${name}__/\$ENV{VAL}/g" "$out.tmp"
     done
     mv "$out.tmp" "$out"
@@ -204,4 +195,5 @@ printf '   \033[1;32msudo systemctl stop relay-deadman.timer\033[0m\n'
 echo "Если связь пропала — просто подожди ${DEADMAN_MIN} мин, доступ вернётся сам."
 printf '\033[1;33m%s\033[0m\n' "=================================================================="
 echo
-log "На strongSwan-сервере заведи EAP-юзера '$EAP_USERNAME' и закрепи vIP $RELAY_VIP (см. STRONGSWAN-SERVER.md)."
+log "На strongSwan-сервере добавь PSK-conn для relay (id '$RELAY_IKE_ID', vIP $RELAY_VIP)."
+log "PSK для сервера: $(grep -oP 'IPSEC_PSK=\"\K[^\"]+' "$STATE")"
